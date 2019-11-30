@@ -35,6 +35,17 @@
 #include "../libs/zmbv/zmbv.cpp"
 #endif
 
+#if(C_STREAM)
+#include <libavutil/avassert.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/opt.h>
+#include <libavutil/mathematics.h>
+#include <libavutil/timestamp.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
+#endif
+
 static std::string capturedir;
 extern const char* RunningProgram;
 Bitu CaptureState;
@@ -77,6 +88,14 @@ static struct {
 		Bit8u		*index;
 		Bitu		indexsize, indexused;
 	} video;
+#endif
+#if(C_STREAM)
+	struct {
+		FILE * handle;
+		AVFormatContext *oc;
+		AVCodec *audio_codec;
+		AVCodec *video_codec;
+	} stream;
 #endif
 } capture;
 
@@ -566,6 +585,51 @@ skip_shot:
 		CaptureState |= CAPTURE_VIDEO;
 	}
 skip_video:
+#if (C_STREAM)
+	if (CaptureState & STREAM_VIDEO) {
+		for (i=0;i<height;i++) {
+			void * rowPointer;
+			if (flags & CAPTURE_FLAG_DBLW) {
+				void *srcLine;
+				Bitu x;
+				Bitu countWidth = width >> 1;
+				if (flags & CAPTURE_FLAG_DBLH)
+					srcLine=(data+(i >> 1)*pitch);
+				else
+					srcLine=(data+(i >> 0)*pitch);
+				switch ( bpp) {
+				case 8:
+					for (x=0;x<countWidth;x++)
+						((Bit8u *)doubleRow)[x*2+0] =
+						((Bit8u *)doubleRow)[x*2+1] = ((Bit8u *)srcLine)[x];
+					break;
+				case 15:
+				case 16:
+					for (x=0;x<countWidth;x++)
+						((Bit16u *)doubleRow)[x*2+0] =
+						((Bit16u *)doubleRow)[x*2+1] = ((Bit16u *)srcLine)[x];
+					break;
+				case 32:
+					for (x=0;x<countWidth;x++)
+						((Bit32u *)doubleRow)[x*2+0] =
+						((Bit32u *)doubleRow)[x*2+1] = ((Bit32u *)srcLine)[x];
+					break;
+				}
+                rowPointer=doubleRow;
+			} else {
+				if (flags & CAPTURE_FLAG_DBLH)
+					rowPointer=(data+(i >> 1)*pitch);
+				else
+					rowPointer=(data+(i >> 0)*pitch);
+			}
+			capture.video.codec->CompressLines( 1, &rowPointer );
+		}
+
+		/* Everything went okay, set flag again for next frame */
+		CaptureState |= STREAM_VIDEO;
+	}
+skip_stream:
+#endif
 #endif
 	return;
 }
@@ -576,6 +640,21 @@ static void CAPTURE_ScreenShotEvent(bool pressed) {
 	if (!pressed)
 		return;
 	CaptureState |= CAPTURE_IMAGE;
+}
+#endif
+
+
+#if (C_STREAM)
+static void CAPTURE_StreamEvent(bool pressed) {
+	if (!pressed)
+		return;
+	if (CaptureState & STREAM_VIDEO) {
+		/* Close the video stream */
+		CaptureState &= ~STREAM_VIDEO;
+		LOG_MSG("Stopped streaming video.");
+	} else {
+		CaptureState |= STREAM_VIDEO;
+	}
 }
 #endif
 
@@ -599,6 +678,10 @@ void CAPTURE_AddWave(Bit32u freq, Bit32u len, Bit16s * data) {
 		memcpy( &capture.video.audiobuf[capture.video.audioused], data, left*4);
 		capture.video.audioused += left;
 		capture.video.audiorate = freq;
+	}
+#endif
+#if (C_STREAM)
+	if (CaptureState & STREAM_VIDEO) {
 	}
 #endif
 	if (CaptureState & CAPTURE_WAVE) {
@@ -756,10 +839,16 @@ public:
 		MAPPER_AddHandler(CAPTURE_ScreenShotEvent,MK_f5,MMOD1,"scrshot","Screenshot");
 		MAPPER_AddHandler(CAPTURE_VideoEvent,MK_f5,MMOD1|MMOD2,"video","Video");
 #endif
+#if (C_STREAM)
+		MAPPER_AddHandler(CAPTURE_StreamEvent,MK_f2,MMOD1,"stream","Stream");
+#endif
 	}
 	~HARDWARE(){
 #if (C_SSHOT)
 		if (capture.video.handle) CAPTURE_VideoEvent(true);
+#endif
+#if (C_STREAM)
+		if (capture.stream.handle) CAPTURE_StreamEvent(true);
 #endif
 		if (capture.wave.handle) CAPTURE_WaveEvent(true);
 		if (capture.midi.handle) CAPTURE_MidiEvent(true);

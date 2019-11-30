@@ -433,6 +433,16 @@ else
   AC_MSG_RESULT([no])
 fi
 
+AH_TEMPLATE(C_STREAM,[Define to 1 to enable video streaming, requires libav])
+AC_CHECK_HEADER(libavcodec/avcodec.h,have_av_h=yes,)
+AC_CHECK_LIB(avcodec, avcodec_open2, have_av_lib=yes, ,)
+if test x$have_av_lib = xyes -a x$have_av_h = xyes ; then
+  LIBS="$LIBS -lavcodec"
+  AC_DEFINE(C_STREAM,1)
+else
+  AC_MSG_WARN([Can't find libav, stream support disabled])
+fi
+
 AH_TEMPLATE(C_MODEM,[Define to 1 to enable internal modem support, requires SDL_net])
 AH_TEMPLATE(C_IPX,[Define to 1 to enable IPX over Internet networking, requires SDL_net])
 AC_CHECK_HEADER(SDL_net.h,have_sdl_net_h=yes,)

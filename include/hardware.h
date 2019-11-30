@@ -31,6 +31,7 @@ enum OPL_Mode {
 #define CAPTURE_MIDI	0x04
 #define CAPTURE_IMAGE	0x08
 #define CAPTURE_VIDEO	0x10
+#define STREAM_VIDEO	0x20
 
 extern Bitu CaptureState;
 
