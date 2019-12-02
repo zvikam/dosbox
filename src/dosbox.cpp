@@ -421,6 +421,13 @@ void DOSBOX_Init(void) {
 	Pstring = secprop->Add_path("captures",Property::Changeable::Always,"capture");
 	Pstring->Set_help("Directory where things like wave, midi, screenshot get captured.");
 
+#if C_STREAM
+	Pstring = secprop->Add_string("youtube_url",Property::Changeable::WhenIdle,"");
+	Pstring->Set_help("YouTube Stream URL");
+	Pstring = secprop->Add_string("youtube_key",Property::Changeable::WhenIdle,"");
+	Pstring->Set_help("YouTube Stream name/key");
+#endif
+
 #if C_DEBUG
 	LOG_StartUp();
 #endif

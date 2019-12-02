@@ -47,6 +47,7 @@
 #endif
 
 static std::string capturedir;
+static std::string youtubeStreamURL;
 extern const char* RunningProgram;
 Bitu CaptureState;
 
@@ -653,6 +654,7 @@ static void CAPTURE_StreamEvent(bool pressed) {
 		CaptureState &= ~STREAM_VIDEO;
 		LOG_MSG("Stopped streaming video.");
 	} else {
+		LOG_MSG("Streaming to %s", youtubeStreamURL.c_str());
 		CaptureState |= STREAM_VIDEO;
 	}
 }
@@ -833,6 +835,9 @@ public:
 		Prop_path* proppath= section->Get_path("captures");
 		capturedir = proppath->realpath;
 		CaptureState = 0;
+		youtubeStreamURL = section->Get_string("youtube_url")
+						+ std::string("/")
+						+ section->Get_string("youtube_key");
 		MAPPER_AddHandler(CAPTURE_WaveEvent,MK_f6,MMOD1,"recwave","Rec Wave");
 		MAPPER_AddHandler(CAPTURE_MidiEvent,MK_f8,MMOD1|MMOD2,"caprawmidi","Cap MIDI");
 #if (C_SSHOT)
@@ -840,6 +845,7 @@ public:
 		MAPPER_AddHandler(CAPTURE_VideoEvent,MK_f5,MMOD1|MMOD2,"video","Video");
 #endif
 #if (C_STREAM)
+		LOG_MSG("add stream handler");
 		MAPPER_AddHandler(CAPTURE_StreamEvent,MK_f2,MMOD1,"stream","Stream");
 #endif
 	}
