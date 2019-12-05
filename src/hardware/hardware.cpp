@@ -36,14 +36,7 @@
 #endif
 
 #if(C_STREAM)
-#include <libavutil/avassert.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/opt.h>
-#include <libavutil/mathematics.h>
-#include <libavutil/timestamp.h>
-#include <libavformat/avformat.h>
-#include <libswscale/swscale.h>
-#include <libswresample/swresample.h>
+#include "../libs/ffmpeg/muxing.h"
 #endif
 
 static std::string capturedir;
@@ -91,14 +84,9 @@ static struct {
 	} video;
 #endif
 #if(C_STREAM)
-	struct {
-		FILE * handle;
-		AVFormatContext *oc;
-		AVCodec *audio_codec;
-		AVCodec *video_codec;
-	} stream;
+	StreamContext stream;
 #endif
-} capture;
+} capture = {0};
 
 FILE * OpenCaptureFile(const char * type,const char * ext) {
 	if(capturedir.empty()) {
@@ -588,43 +576,109 @@ skip_shot:
 skip_video:
 #if (C_STREAM)
 	if (CaptureState & STREAM_VIDEO) {
-		for (i=0;i<height;i++) {
-			void * rowPointer;
-			if (flags & CAPTURE_FLAG_DBLW) {
-				void *srcLine;
-				Bitu x;
-				Bitu countWidth = width >> 1;
-				if (flags & CAPTURE_FLAG_DBLH)
-					srcLine=(data+(i >> 1)*pitch);
-				else
-					srcLine=(data+(i >> 0)*pitch);
-				switch ( bpp) {
-				case 8:
-					for (x=0;x<countWidth;x++)
-						((Bit8u *)doubleRow)[x*2+0] =
-						((Bit8u *)doubleRow)[x*2+1] = ((Bit8u *)srcLine)[x];
-					break;
-				case 15:
-				case 16:
-					for (x=0;x<countWidth;x++)
-						((Bit16u *)doubleRow)[x*2+0] =
-						((Bit16u *)doubleRow)[x*2+1] = ((Bit16u *)srcLine)[x];
-					break;
-				case 32:
-					for (x=0;x<countWidth;x++)
-						((Bit32u *)doubleRow)[x*2+0] =
-						((Bit32u *)doubleRow)[x*2+1] = ((Bit32u *)srcLine)[x];
-					break;
-				}
-                rowPointer=doubleRow;
-			} else {
-				if (flags & CAPTURE_FLAG_DBLH)
-					rowPointer=(data+(i >> 1)*pitch);
-				else
-					rowPointer=(data+(i >> 0)*pitch);
-			}
-			capture.video.codec->CompressLines( 1, &rowPointer );
+		/* Disable capturing if any of the test fails */
+		if (capture.stream.oc && (
+			capture.stream.width != width ||
+			capture.stream.height != height ||
+			capture.stream.fps != (int)fps)) 
+		{
+			CAPTURE_VideoEvent(true);
 		}
+		CaptureState &= ~STREAM_VIDEO;
+
+		if (!capture.stream.oc) {
+			capture.stream.width = width;
+			capture.stream.height = height;
+			capture.stream.fps = (int)fps;
+			streaming_init(youtubeStreamURL.c_str(), &capture.stream);
+			if (capture.stream.oc) {
+				CaptureState |= STREAM_VIDEO;
+			} else {
+				LOG_MSG("Failed to initialize streaming");
+			}
+		}
+
+		if (!capture.stream.oc)
+			goto skip_stream;
+
+		for (i=0;i<height;i++) {
+			void *rowPointer;
+			void *srcLine;
+			if (flags & CAPTURE_FLAG_DBLH)
+				srcLine=(data+(i >> 1)*pitch);
+			else
+				srcLine=(data+(i >> 0)*pitch);
+			switch (bpp) {
+			case 8:
+				if (flags & CAPTURE_FLAG_DBLW) {
+					for (Bitu x=0;x<countWidth;x++) {
+						Bit8u pixel = ((Bit8u *)srcLine)[x];
+						doubleRow[x*6+0] = doubleRow[x*6+3] = pal[pixel*4+0];
+						doubleRow[x*6+1] = doubleRow[x*6+4] = pal[pixel*4+1];
+						doubleRow[x*6+2] = doubleRow[x*6+5] = pal[pixel*4+2];
+					}
+				} else {
+					for (Bitu x=0;x<countWidth;x++) {
+						Bit8u pixel = ((Bit8u *)srcLine)[x];
+						doubleRow[x*3+0] = pal[pixel*4+0];
+						doubleRow[x*3+1] = pal[pixel*4+1];
+						doubleRow[x*3+2] = pal[pixel*4+2];
+					}
+				}
+				break;
+			case 15:
+				if (flags & CAPTURE_FLAG_DBLW) {
+					for (Bitu x=0;x<countWidth;x++) {
+						Bitu pixel = ((Bit16u *)srcLine)[x];
+						doubleRow[x*6+0] = doubleRow[x*6+3] = ((pixel& 0x001f) * 0x21) >>  2;
+						doubleRow[x*6+1] = doubleRow[x*6+4] = ((pixel& 0x03e0) * 0x21) >>  7;
+						doubleRow[x*6+2] = doubleRow[x*6+5] = ((pixel& 0x7c00) * 0x21) >>  12;
+					}
+				} else {
+					for (Bitu x=0;x<countWidth;x++) {
+						Bitu pixel = ((Bit16u *)srcLine)[x];
+						doubleRow[x*3+0] = ((pixel& 0x001f) * 0x21) >>  2;
+						doubleRow[x*3+1] = ((pixel& 0x03e0) * 0x21) >>  7;
+						doubleRow[x*3+2] = ((pixel& 0x7c00) * 0x21) >>  12;
+					}
+				}
+				break;
+			case 16:
+				if (flags & CAPTURE_FLAG_DBLW) {
+					for (Bitu x=0;x<countWidth;x++) {
+						Bitu pixel = ((Bit16u *)srcLine)[x];
+						doubleRow[x*6+0] = doubleRow[x*6+3] = ((pixel& 0x001f) * 0x21) >> 2;
+						doubleRow[x*6+1] = doubleRow[x*6+4] = ((pixel& 0x07e0) * 0x41) >> 9;
+						doubleRow[x*6+2] = doubleRow[x*6+5] = ((pixel& 0xf800) * 0x21) >> 13;
+					}
+				} else {
+					for (Bitu x=0;x<countWidth;x++) {
+						Bitu pixel = ((Bit16u *)srcLine)[x];
+						doubleRow[x*3+0] = ((pixel& 0x001f) * 0x21) >>  2;
+						doubleRow[x*3+1] = ((pixel& 0x07e0) * 0x41) >>  9;
+						doubleRow[x*3+2] = ((pixel& 0xf800) * 0x21) >>  13;
+					}
+				}
+				break;
+			case 32:
+				if (flags & CAPTURE_FLAG_DBLW) {
+					for (Bitu x=0;x<countWidth;x++) {
+						doubleRow[x*6+0] = doubleRow[x*6+3] = ((Bit8u *)srcLine)[x*4+0];
+						doubleRow[x*6+1] = doubleRow[x*6+4] = ((Bit8u *)srcLine)[x*4+1];
+						doubleRow[x*6+2] = doubleRow[x*6+5] = ((Bit8u *)srcLine)[x*4+2];
+					}
+				} else {
+					for (Bitu x=0;x<countWidth;x++) {
+						doubleRow[x*3+0] = ((Bit8u *)srcLine)[x*4+0];
+						doubleRow[x*3+1] = ((Bit8u *)srcLine)[x*4+1];
+						doubleRow[x*3+2] = ((Bit8u *)srcLine)[x*4+2];
+					}
+				}
+				break;
+			}
+			streaming_video_line(&capture.stream, i, (Bit8u*)doubleRow);
+		}
+		streaming_video(&capture.stream);
 
 		/* Everything went okay, set flag again for next frame */
 		CaptureState |= STREAM_VIDEO;
@@ -651,8 +705,11 @@ static void CAPTURE_StreamEvent(bool pressed) {
 		return;
 	if (CaptureState & STREAM_VIDEO) {
 		/* Close the video stream */
-		CaptureState &= ~STREAM_VIDEO;
-		LOG_MSG("Stopped streaming video.");
+		if (capture.stream.oc) {
+			streaming_cleanup(&capture.stream);
+			CaptureState &= ~STREAM_VIDEO;
+			LOG_MSG("Stopped streaming video.");
+		}
 	} else {
 		LOG_MSG("Streaming to %s", youtubeStreamURL.c_str());
 		CaptureState |= STREAM_VIDEO;
@@ -684,6 +741,7 @@ void CAPTURE_AddWave(Bit32u freq, Bit32u len, Bit16s * data) {
 #endif
 #if (C_STREAM)
 	if (CaptureState & STREAM_VIDEO) {
+		streaming_audio(&capture.stream, len, data);
 	}
 #endif
 	if (CaptureState & CAPTURE_WAVE) {
@@ -854,7 +912,7 @@ public:
 		if (capture.video.handle) CAPTURE_VideoEvent(true);
 #endif
 #if (C_STREAM)
-		if (capture.stream.handle) CAPTURE_StreamEvent(true);
+		if (capture.stream.oc) CAPTURE_StreamEvent(true);
 #endif
 		if (capture.wave.handle) CAPTURE_WaveEvent(true);
 		if (capture.midi.handle) CAPTURE_MidiEvent(true);

@@ -437,7 +437,7 @@ AH_TEMPLATE(C_STREAM,[Define to 1 to enable video streaming, requires libav])
 AC_CHECK_HEADER(libavcodec/avcodec.h,have_av_h=yes,)
 AC_CHECK_LIB(avcodec, avcodec_open2, have_av_lib=yes, ,)
 if test x$have_av_lib = xyes -a x$have_av_h = xyes ; then
-  LIBS="$LIBS -lavcodec"
+  LIBS="$LIBS -lswresample -lavutil -lm -lavcodec -lswscale -lavformat"
   AC_DEFINE(C_STREAM,1)
 else
   AC_MSG_WARN([Can't find libav, stream support disabled])
@@ -631,6 +631,7 @@ src/ints/Makefile
 src/libs/Makefile
 src/libs/zmbv/Makefile
 src/libs/gui_tk/Makefile
+src/libs/ffmpeg/Makefile
 src/misc/Makefile
 src/shell/Makefile
 src/platform/Makefile

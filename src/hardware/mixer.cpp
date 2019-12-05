@@ -396,7 +396,7 @@ extern bool ticksLocked;
 static inline bool Mixer_irq_important(void) {
 	/* In some states correct timing of the irqs is more important then
 	 * non stuttering audo */
-	return (ticksLocked || (CaptureState & (CAPTURE_WAVE|CAPTURE_VIDEO)));
+	return (ticksLocked || (CaptureState & (CAPTURE_WAVE|CAPTURE_VIDEO|STREAM_VIDEO)));
 }
 
 static Bit32u calc_tickadd(Bit32u freq) {
@@ -417,7 +417,7 @@ static void MIXER_MixData(Bitu needed) {
 		chan->Mix(needed);
 		chan=chan->next;
 	}
-	if (CaptureState & (CAPTURE_WAVE|CAPTURE_VIDEO)) {
+	if (CaptureState & (CAPTURE_WAVE|CAPTURE_VIDEO|STREAM_VIDEO)) {
 		Bit16s convert[1024][2];
 		Bitu added=needed-mixer.done;
 		if (added>1024)

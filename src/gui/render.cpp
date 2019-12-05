@@ -182,7 +182,7 @@ bool RENDER_StartUpdate(void) {
 			render.fullFrame = true;
 		} else {
 			RENDER_DrawLine = RENDER_StartLineHandler;
-			if (GCC_UNLIKELY(CaptureState & (CAPTURE_IMAGE|CAPTURE_VIDEO))) 
+			if (GCC_UNLIKELY(CaptureState & (CAPTURE_IMAGE|CAPTURE_VIDEO|STREAM_VIDEO))) 
 				render.fullFrame = true;
 			else
 				render.fullFrame = false;
@@ -204,7 +204,7 @@ void RENDER_EndUpdate( bool abort ) {
 	if (GCC_UNLIKELY(!render.updating))
 		return;
 	RENDER_DrawLine = RENDER_EmptyLineHandler;
-	if (GCC_UNLIKELY(CaptureState & (CAPTURE_IMAGE|CAPTURE_VIDEO))) {
+	if (GCC_UNLIKELY(CaptureState & (CAPTURE_IMAGE|CAPTURE_VIDEO|STREAM_VIDEO))) {
 		Bitu pitch, flags;
 		flags = 0;
 		if (render.src.dblw != render.src.dblh) {
