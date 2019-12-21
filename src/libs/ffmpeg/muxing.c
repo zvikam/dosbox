@@ -51,7 +51,6 @@
 
 #define LOG_MSG printf
 
-#define STREAM_FRAME_RATE 35
 #define SCALE_FLAGS SWS_BICUBIC
 
 static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt)
@@ -150,7 +149,6 @@ static int add_stream(OutputStream *ost, AVFormatContext *oc,
          * identical to 1. */
         ost->st->time_base = (AVRational){ 1, ctx->fps };
         c->time_base       = ost->st->time_base;
-        //c->framerate       = (AVRational){ STREAM_FRAME_RATE, 1 };
 
         c->gop_size      = 12; /* emit one intra frame every twelve frames at most */
         c->pix_fmt       = AV_PIX_FMT_YUV420P;
@@ -288,13 +286,11 @@ static AVFrame *get_audio_frame(OutputStream *ost, int* nb_samples)
 static int write_audio_frame(AVFormatContext *oc, OutputStream *ost, int nb_samples)
 {
     AVCodecContext *c;
-    AVPacket pkt = { 0 }; // data and size must be 0;
     AVFrame *frame;
     int ret;
     int got_packet;
     int dst_nb_samples;
 
-    av_init_packet(&pkt);
     c = ost->enc;
 
     frame = get_audio_frame(ost, &nb_samples);
@@ -327,19 +323,29 @@ static int write_audio_frame(AVFormatContext *oc, OutputStream *ost, int nb_samp
         ost->samples_count += dst_nb_samples;
     }
 
-    ret = avcodec_encode_audio2(c, &pkt, frame, &got_packet);
+    /* encode the image */
+    ret = avcodec_send_frame(ost->enc, frame);
     if (ret < 0) {
         LOG_MSG("Error encoding audio frame: %s\n", av_err2str(ret));
         return ret;
     }
 
-    if (got_packet) {
-        ret = write_frame(oc, &c->time_base, ost->st, &pkt);
-        if (ret < 0) {
-            LOG_MSG("Error while writing audio frame: %s\n",
-                    av_err2str(ret));
-            return ret;
+    while (ret >= 0) {
+        ret = avcodec_receive_packet(ost->enc, ost->pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            return 0;
+        else if (ret < 0) {
+            LOG_MSG("Error during encoding\n");
+            return -1;
         }
+        got_packet |= 1;
+        ret = write_frame(oc, &c->time_base, ost->st, ost->pkt);
+        av_packet_unref(ost->pkt);
+        if (ret < 0) {
+            LOG_MSG("Error while writing audio frame: %s\n", av_err2str(ret));
+            return -1;
+        }
+        ret = 0;
     }
 
     return (frame || got_packet) ? 0 : 1;
@@ -584,16 +590,7 @@ int streaming_video_line(StreamContext* ctx, int y, Bit8u *data)
 
 int streaming_video(StreamContext* ctx)
 {
-    int ret = 0;
-    int ratio = ceil(ctx->fps / STREAM_FRAME_RATE);
-    //if ((ctx->frames % ratio) == 0)
-        ret = write_video_frame(ctx->oc, &ctx->video_st);
-
-    /*if (ctx->bufferedAudio > 0) {
-        //LOG_MSG("using %u buffered audio bytes\n", ctx->bufferedAudio);
-        ret = write_audio_frame(ctx->oc, &ctx->audio_st, ctx->bufferedAudio / 4);
-        ctx->bufferedAudio = 0;
-    }*/
+    return write_video_frame(ctx->oc, &ctx->video_st);
 }
 
 int streaming_audio(StreamContext* ctx, Bit32u len, Bit16s *data)
@@ -608,8 +605,6 @@ int streaming_audio(StreamContext* ctx, Bit32u len, Bit16s *data)
         memcpy(&frame->data[0][ctx->bufferedAudio], data, copyBytes);
         ctx->bufferedAudio += copyBytes;
 
-        //if (ctx->bufferedAudio >= frameByfferSize)
-        //if (0)
         {
             //LOG_MSG("using %u audio bytes\n", ctx->bufferedAudio);
             ret = write_audio_frame(ctx->oc, &ctx->audio_st, ctx->bufferedAudio / 4);
