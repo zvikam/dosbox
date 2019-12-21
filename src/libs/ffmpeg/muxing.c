@@ -42,15 +42,23 @@
 
 #include "muxing.h"
 
+#ifndef max
+#define max(a,b) ((a)>(b)?(a):(b))
+#endif
+#ifndef min
+#define min(a,b) ((a)<(b)?(a):(b))
+#endif
+
 #define LOG_MSG printf
 
+#define STREAM_FRAME_RATE 35
 #define SCALE_FLAGS SWS_BICUBIC
 
 static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt)
 {
     AVRational *time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
 
-    printf("pts:%s pts_time:%s dts:%s dts_time:%s duration:%s duration_time:%s stream_index:%d\n",
+    LOG_MSG("pts:%s pts_time:%s dts:%s dts_time:%s duration:%s duration_time:%s stream_index:%d\n",
            av_ts2str(pkt->pts), av_ts2timestr(pkt->pts, time_base),
            av_ts2str(pkt->dts), av_ts2timestr(pkt->dts, time_base),
            av_ts2str(pkt->duration), av_ts2timestr(pkt->duration, time_base),
@@ -64,7 +72,7 @@ static int write_frame(AVFormatContext *fmt_ctx, const AVRational *time_base, AV
     pkt->stream_index = st->index;
 
     /* Write the compressed frame to the media file. */
-    log_packet(fmt_ctx, pkt);
+    //log_packet(fmt_ctx, pkt);
     return av_interleaved_write_frame(fmt_ctx, pkt);
 }
 
@@ -98,10 +106,16 @@ static int add_stream(OutputStream *ost, AVFormatContext *oc,
     }
     ost->enc = c;
 
+    ost->pkt = av_packet_alloc();
+    if (!ost->pkt) {
+        LOG_MSG("Could not alloc a packet\n");
+        return -1;
+    }
+
     switch ((*codec)->type) {
     case AVMEDIA_TYPE_AUDIO:
         c->sample_fmt  = (*codec)->sample_fmts ?
-            (*codec)->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+            (*codec)->sample_fmts[0] : AV_SAMPLE_FMT_S16;
         c->bit_rate    = 64000;
         c->sample_rate = 44100;
         if ((*codec)->supported_samplerates) {
@@ -111,7 +125,6 @@ static int add_stream(OutputStream *ost, AVFormatContext *oc,
                     c->sample_rate = 44100;
             }
         }
-        c->channels        = av_get_channel_layout_nb_channels(c->channel_layout);
         c->channel_layout = AV_CH_LAYOUT_STEREO;
         if ((*codec)->channel_layouts) {
             c->channel_layout = (*codec)->channel_layouts[0];
@@ -127,7 +140,7 @@ static int add_stream(OutputStream *ost, AVFormatContext *oc,
     case AVMEDIA_TYPE_VIDEO:
         c->codec_id = codec_id;
 
-        c->bit_rate = 800000;
+        c->bit_rate = 750000;
         /* Resolution must be a multiple of two. */
         c->width    = ctx->width;
         c->height   = ctx->height;
@@ -135,9 +148,9 @@ static int add_stream(OutputStream *ost, AVFormatContext *oc,
          * of which frame timestamps are represented. For fixed-fps content,
          * timebase should be 1/framerate and timestamp increments should be
          * identical to 1. */
-        ost->st->time_base = (AVRational){ 2, ctx->fps };
+        ost->st->time_base = (AVRational){ 1, ctx->fps };
         c->time_base       = ost->st->time_base;
-        c->framerate       = (AVRational){ ctx->fps, 2 };
+        //c->framerate       = (AVRational){ STREAM_FRAME_RATE, 1 };
 
         c->gop_size      = 12; /* emit one intra frame every twelve frames at most */
         c->pix_fmt       = AV_PIX_FMT_YUV420P;
@@ -213,12 +226,6 @@ static int open_audio(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, AV
         return ret;
     }
 
-    /* init signal generator */
-    ost->t     = 0;
-    ost->tincr = 2 * M_PI * 110.0 / c->sample_rate;
-    /* increment frequency by 110 Hz per second */
-    ost->tincr2 = 2 * M_PI * 110.0 / c->sample_rate / c->sample_rate;
-
     if (c->codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE)
         nb_samples = 10000;
     else
@@ -262,22 +269,14 @@ static int open_audio(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, AV
 
 /* Prepare a 16 bit dummy audio frame of 'frame_size' samples and
  * 'nb_channels' channels. */
-static AVFrame *get_audio_frame(OutputStream *ost)
+static AVFrame *get_audio_frame(OutputStream *ost, int* nb_samples)
 {
     AVFrame *frame = ost->tmp_frame;
-    int j, i, v;
-    int16_t *q = (int16_t*)frame->data[0];
-
-    for (j = 0; j <frame->nb_samples; j++) {
-        v = (int)(sin(ost->t) * 10000);
-        for (i = 0; i < ost->enc->channels; i++)
-            *q++ = v;
-        ost->t     += ost->tincr;
-        ost->tincr += ost->tincr2;
-    }
 
     frame->pts = ost->next_pts;
-    ost->next_pts  += frame->nb_samples;
+    if (*nb_samples == 0)
+        *nb_samples = frame->nb_samples;
+    ost->next_pts  += *nb_samples;
 
     return frame;
 }
@@ -286,7 +285,7 @@ static AVFrame *get_audio_frame(OutputStream *ost)
  * encode one audio frame and send it to the muxer
  * return 1 when encoding is finished, 0 otherwise, <0 on error
  */
-static int write_audio_frame(AVFormatContext *oc, OutputStream *ost)
+static int write_audio_frame(AVFormatContext *oc, OutputStream *ost, int nb_samples)
 {
     AVCodecContext *c;
     AVPacket pkt = { 0 }; // data and size must be 0;
@@ -298,14 +297,13 @@ static int write_audio_frame(AVFormatContext *oc, OutputStream *ost)
     av_init_packet(&pkt);
     c = ost->enc;
 
-    frame = get_audio_frame(ost);
+    frame = get_audio_frame(ost, &nb_samples);
 
     if (frame) {
         /* convert samples from native format to destination codec format, using the resampler */
             /* compute destination number of samples */
-            dst_nb_samples = av_rescale_rnd(swr_get_delay(ost->swr_ctx, c->sample_rate) + frame->nb_samples,
+            dst_nb_samples = av_rescale_rnd(swr_get_delay(ost->swr_ctx, c->sample_rate) + nb_samples,
                                             c->sample_rate, c->sample_rate, AV_ROUND_UP);
-            av_assert0(dst_nb_samples == frame->nb_samples);
 
         /* when we pass a frame to the encoder, it may keep a reference to it
          * internally;
@@ -318,7 +316,7 @@ static int write_audio_frame(AVFormatContext *oc, OutputStream *ost)
         /* convert to destination format */
         ret = swr_convert(ost->swr_ctx,
                           ost->frame->data, dst_nb_samples,
-                          (const uint8_t **)frame->data, frame->nb_samples);
+                          (const uint8_t **)frame->data, nb_samples);
         if (ret < 0) {
             LOG_MSG("Error while converting\n");
             return ret;
@@ -380,6 +378,8 @@ static int open_video(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, AV
     AVDictionary *opt = NULL;
 
     av_dict_copy(&opt, opt_arg, 0);
+
+    av_opt_set(c->priv_data, "preset", "slow", 0);
 
     /* open the codec */
     ret = avcodec_open2(c, codec, &opt);
@@ -455,31 +455,34 @@ static int write_video_frame(AVFormatContext *oc, OutputStream *ost)
     AVCodecContext *c;
     AVFrame *frame;
     int got_packet = 0;
-    AVPacket pkt = { 0 };
 
     c = ost->enc;
 
     frame = get_video_frame(ost);
 
-    av_init_packet(&pkt);
-
     /* encode the image */
-    ret = avcodec_encode_video2(c, &pkt, frame, &got_packet);
+    ret = avcodec_send_frame(ost->enc, frame);
     if (ret < 0) {
         LOG_MSG("Error encoding video frame: %s\n", av_err2str(ret));
         return ret;
     }
 
-    if (got_packet) {
-        pkt.duration = 100.0 * ost->enc->framerate.den / ost->enc->framerate.num;
-        ret = write_frame(oc, &c->time_base, ost->st, &pkt);
-    } else {
+    while (ret >= 0) {
+        ret = avcodec_receive_packet(ost->enc, ost->pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            return 0;
+        else if (ret < 0) {
+            LOG_MSG("Error during encoding\n");
+            return -1;
+        }
+        got_packet |= 1;
+        ret = write_frame(oc, &c->time_base, ost->st, ost->pkt);
+        av_packet_unref(ost->pkt);
+        if (ret < 0) {
+            LOG_MSG("Error while writing video frame: %s\n", av_err2str(ret));
+            return -1;
+        }
         ret = 0;
-    }
-
-    if (ret < 0) {
-        LOG_MSG("Error while writing video frame: %s\n", av_err2str(ret));
-        return ret;
     }
 
     return (frame || got_packet) ? 0 : 1;
@@ -492,6 +495,10 @@ static void close_stream(AVFormatContext *oc, OutputStream *ost)
     av_frame_free(&ost->tmp_frame);
     sws_freeContext(ost->sws_ctx);
     swr_free(&ost->swr_ctx);
+    av_packet_free(&ost->pkt);
+
+    ost->sws_ctx = NULL;
+    ost->swr_ctx = NULL;
 }
 
 /**************************************************************/
@@ -499,6 +506,9 @@ int streaming_init(const char *streamname, StreamContext* ctx)
 {
     AVOutputFormat *fmt;
     int ret;
+
+    ctx->frames = 0;
+    ctx->bufferedAudio = 0;
 
     avformat_alloc_output_context2(&ctx->oc, NULL, "flv", streamname);
 
@@ -574,15 +584,45 @@ int streaming_video_line(StreamContext* ctx, int y, Bit8u *data)
 
 int streaming_video(StreamContext* ctx)
 {
-    if ((ctx->frames++ % 2) == 1)
-        return 0;
+    int ret = 0;
+    int ratio = ceil(ctx->fps / STREAM_FRAME_RATE);
+    //if ((ctx->frames % ratio) == 0)
+        ret = write_video_frame(ctx->oc, &ctx->video_st);
 
-    return write_video_frame(ctx->oc, &ctx->video_st);
+    /*if (ctx->bufferedAudio > 0) {
+        //LOG_MSG("using %u buffered audio bytes\n", ctx->bufferedAudio);
+        ret = write_audio_frame(ctx->oc, &ctx->audio_st, ctx->bufferedAudio / 4);
+        ctx->bufferedAudio = 0;
+    }*/
 }
 
 int streaming_audio(StreamContext* ctx, Bit32u len, Bit16s *data)
 {
-    return 0;
+    int ret = 0;
+    len *= 4; // convert to bytes
+    AVFrame *frame = ctx->audio_st.tmp_frame;
+    if (frame != NULL) {
+        int frameByfferSize = frame->nb_samples * 4; // convert to bytes
+        int copyBytes = min(len, frameByfferSize - ctx->bufferedAudio);
+        //LOG_MSG("buffering %u audio bytes\n", copyBytes);
+        memcpy(&frame->data[0][ctx->bufferedAudio], data, copyBytes);
+        ctx->bufferedAudio += copyBytes;
+
+        //if (ctx->bufferedAudio >= frameByfferSize)
+        //if (0)
+        {
+            //LOG_MSG("using %u audio bytes\n", ctx->bufferedAudio);
+            ret = write_audio_frame(ctx->oc, &ctx->audio_st, ctx->bufferedAudio / 4);
+
+            ctx->bufferedAudio = 0;
+            if (copyBytes < len) {
+                //LOG_MSG("buffering %u left-over audio bytes\n", len - copyBytes);
+                memcpy(&frame->data[0][ctx->bufferedAudio], &data[copyBytes], len - copyBytes);
+            }
+        }
+    }
+
+    return ret;
 }
 
 #endif

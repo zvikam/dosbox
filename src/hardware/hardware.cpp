@@ -306,6 +306,26 @@ static void CAPTURE_VideoEvent(bool pressed) {
 }
 #endif
 
+
+#if (C_STREAM)
+static void CAPTURE_StreamEvent(bool pressed) {
+	if (!pressed)
+		return;
+	if (CaptureState & STREAM_VIDEO) {
+		/* Close the video stream */
+		if (capture.stream.oc) {
+			streaming_cleanup(&capture.stream);
+			CaptureState &= ~STREAM_VIDEO;
+			LOG_MSG("Stopped streaming video.");
+		}
+	} else {
+		LOG_MSG("Streaming to %s", youtubeStreamURL.c_str());
+		CaptureState |= STREAM_VIDEO;
+	}
+}
+#endif
+
+
 void CAPTURE_AddImage(Bitu width, Bitu height, Bitu bpp, Bitu pitch, Bitu flags, float fps, Bit8u * data, Bit8u * pal) {
 #if (C_SSHOT)
 	Bitu i;
@@ -582,7 +602,7 @@ skip_video:
 			capture.stream.height != height ||
 			capture.stream.fps != (int)fps)) 
 		{
-			CAPTURE_VideoEvent(true);
+			CAPTURE_StreamEvent(true);
 		}
 		CaptureState &= ~STREAM_VIDEO;
 
@@ -695,25 +715,6 @@ static void CAPTURE_ScreenShotEvent(bool pressed) {
 	if (!pressed)
 		return;
 	CaptureState |= CAPTURE_IMAGE;
-}
-#endif
-
-
-#if (C_STREAM)
-static void CAPTURE_StreamEvent(bool pressed) {
-	if (!pressed)
-		return;
-	if (CaptureState & STREAM_VIDEO) {
-		/* Close the video stream */
-		if (capture.stream.oc) {
-			streaming_cleanup(&capture.stream);
-			CaptureState &= ~STREAM_VIDEO;
-			LOG_MSG("Stopped streaming video.");
-		}
-	} else {
-		LOG_MSG("Streaming to %s", youtubeStreamURL.c_str());
-		CaptureState |= STREAM_VIDEO;
-	}
 }
 #endif
 

@@ -21,10 +21,10 @@ typedef struct OutputStream {
     AVFrame *frame;
     AVFrame *tmp_frame;
 
-    float t, tincr, tincr2;
-
     struct SwsContext *sws_ctx;
     struct SwrContext *swr_ctx;
+
+    AVPacket *pkt;
 } OutputStream;
 
 typedef struct StreamContext {
@@ -36,6 +36,7 @@ typedef struct StreamContext {
 	int	width;
     int height;
 	int fps;
+    int bufferedAudio;
     Bitu frames;
 } StreamContext;
 
